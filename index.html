@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>칼바람 챔피언 티어리스트</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">ARAM TIER LIST</p>
+      <h1>칼바람 챔피언 티어리스트</h1>
+      <p class="description">
+        챔피언 카드를 드래그하여 티어와 순서를 변경할 수 있습니다.<br>
+        앞쪽에 배치할수록 고 티어 밸류입니다.
+      </p>
+    </div>
+    <div class="topbar-tools">
+      <div class="champion-search">
+        <div class="search-input-wrap">
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input
+            id="championSearchInput"
+            type="search"
+            placeholder="챔피언 검색"
+            autocomplete="off"
+            aria-label="챔피언 검색"
+            aria-controls="championSearchResults"
+          >
+          <button id="clearSearchButton" class="clear-search" type="button" aria-label="검색어 지우기">×</button>
+        </div>
+        <div id="championSearchResults" class="search-results" role="listbox" hidden></div>
+      </div>
+      <div class="actions" aria-label="배치 편집 도구">
+        <button id="undoButton" class="icon-button" type="button" aria-label="뒤로가기" title="뒤로가기">
+          <span aria-hidden="true">↶</span>
+        </button>
+        <button id="redoButton" class="icon-button" type="button" aria-label="앞으로가기" title="앞으로가기">
+          <span aria-hidden="true">↷</span>
+        </button>
+        <button id="resetButton" type="button">초기화</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="tierBoard" class="tier-board" aria-label="칼바람 챔피언 티어 보드"></main>
+
+  <template id="championTemplate">
+    <article class="champion-card" draggable="true">
+      <div class="portrait-placeholder">
+        <img class="champion-image" alt="" loading="lazy" decoding="async">
+        <span aria-hidden="true">IMAGE</span>
+      </div>
+      <p class="champion-name"></p>
+    </article>
+  </template>
+
+  <dialog id="statsDialog" class="stats-dialog" aria-labelledby="statsChampionName">
+    <button id="closeStatsButton" class="dialog-close" type="button" aria-label="아이템 빌드 닫기">×</button>
+    <div class="stats-heading">
+      <img id="statsChampionImage" class="stats-champion-image" alt="">
+      <div>
+        <p class="stats-champion-title">아이템 빌드</p>
+        <h2 id="statsChampionName"></h2>
+        <p id="statsChampionTags" class="stats-champion-tags"></p>
+      </div>
+    </div>
+    <div id="statsGrid" class="build-options"></div>
+    <p class="stats-source">항목을 눌러 복수 선택할 수 있습니다.</p>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
