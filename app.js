@@ -4,6 +4,14 @@ const LEGACY_STORAGE_KEY = "aram-tier-list-v1";
 const BUILD_STORAGE_KEY = "aram-item-builds-v1";
 const RIOT_REALM_URL = "https://ddragon.leagueoflegends.com/realms/kr.json";
 const RIOT_CDN_ROOT = "https://ddragon.leagueoflegends.com/cdn";
+const SUPABASE_URL = "https://gykwvysmezamqbwcwlqj.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_x0t0SwIJP6R4HU48U_YVYA_UQQa4hJH";
+const ADMIN_EMAIL = "isaac2kw@gmail.com";
+const STATE_TABLE = "aram_tier_state";
+const STATE_ROW_ID = 1;
+const supabaseClient = globalThis.supabase?.createClient
+  ? globalThis.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+  : null;
 const ROLE_NAMES = ["원딜", "마법사(AP)", "전사", "탱커", "유틸"];
 const BUILD_OPTIONS = {
   "원딜": [
@@ -107,6 +115,14 @@ const closeStatsButton = document.querySelector("#closeStatsButton");
 const searchInput = document.querySelector("#championSearchInput");
 const searchResults = document.querySelector("#championSearchResults");
 const clearSearchButton = document.querySelector("#clearSearchButton");
+const connectionStatus = document.querySelector("#connectionStatus");
+const adminButton = document.querySelector("#adminButton");
+const loginDialog = document.querySelector("#loginDialog");
+const loginForm = document.querySelector("#loginForm");
+const closeLoginButton = document.querySelector("#closeLoginButton");
+const adminEmailInput = document.querySelector("#adminEmailInput");
+const adminPasswordInput = document.querySelector("#adminPasswordInput");
+const loginMessage = document.querySelector("#loginMessage");
 
 let tiers = [];
 let championMetadata = new Map();
@@ -119,6 +135,11 @@ let itemBuildSelections = loadBuildSelections();
 let activeBuildChampion = "";
 let activeBuildRole = "";
 let activeSearchName = "";
+let currentSession = null;
+let isAdmin = false;
+let realtimeChannel = null;
+let serverStateLoaded = false;
+let saveInProgress = false;
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -138,6 +159,7 @@ function loadBuildSelections() {
 
 function saveBuildSelections() {
   localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(itemBuildSelections));
+  persistServerState();
 }
 
 function classifyChampion(champion) {
@@ -215,6 +237,7 @@ function loadSavedState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tiers));
+  persistServerState();
 }
 
 function stateString() {
@@ -222,8 +245,130 @@ function stateString() {
 }
 
 function updateHistoryButtons() {
-  undoButton.disabled = undoStack.length === 0;
-  redoButton.disabled = redoStack.length === 0;
+  undoButton.disabled = !isAdmin || undoStack.length === 0;
+  redoButton.disabled = !isAdmin || redoStack.length === 0;
+  resetButton.disabled = !isAdmin;
+}
+
+function setConnectionStatus(text, state = "") {
+  connectionStatus.textContent = text;
+  connectionStatus.dataset.state = state;
+}
+
+function updateAdminUi() {
+  document.body.classList.toggle("admin-mode", isAdmin);
+  adminButton.textContent = isAdmin ? "로그아웃" : "관리자 로그인";
+  adminButton.classList.toggle("logged-in", isAdmin);
+  document.querySelectorAll(".champion-card").forEach((card) => {
+    card.draggable = isAdmin;
+    card.classList.toggle("read-only", !isAdmin);
+  });
+  updateHistoryButtons();
+}
+
+function validServerTierData(value) {
+  return isValidSavedState(value);
+}
+
+async function loadServerState() {
+  if (!supabaseClient) {
+    setConnectionStatus("연결 모듈 오류", "error");
+    return false;
+  }
+  setConnectionStatus("데이터 불러오는 중", "loading");
+  const { data, error } = await supabaseClient
+    .from(STATE_TABLE)
+    .select("tier_data, build_data, updated_at")
+    .eq("id", STATE_ROW_ID)
+    .single();
+
+  if (error) {
+    console.error("Supabase 데이터 조회 실패:", error);
+    setConnectionStatus("연결 오류", "error");
+    return false;
+  }
+
+  if (validServerTierData(data.tier_data)) {
+    tiers = deepClone(data.tier_data);
+  } else if (isAdmin) {
+    await persistServerState(true);
+  }
+
+  if (data.build_data && typeof data.build_data === "object") {
+    itemBuildSelections = deepClone(data.build_data);
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(itemBuildSelections));
+  }
+
+  serverStateLoaded = true;
+  setConnectionStatus("실시간 연결", "online");
+  renderBoard();
+  return true;
+}
+
+async function persistServerState(force = false) {
+  if (!supabaseClient) return;
+  if ((!isAdmin || !serverStateLoaded || saveInProgress) && !force) return;
+  saveInProgress = true;
+  setConnectionStatus("저장 중", "saving");
+
+  const { error } = await supabaseClient
+    .from(STATE_TABLE)
+    .update({
+      tier_data: tiers,
+      build_data: itemBuildSelections,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", STATE_ROW_ID);
+
+  saveInProgress = false;
+  if (error) {
+    console.error("Supabase 저장 실패:", error);
+    setConnectionStatus("저장 실패", "error");
+    return;
+  }
+  setConnectionStatus("저장 완료", "online");
+}
+
+function applyRealtimeState(row) {
+  if (!row) return;
+  if (validServerTierData(row.tier_data)) {
+    tiers = deepClone(row.tier_data);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tiers));
+  }
+  if (row.build_data && typeof row.build_data === "object") {
+    itemBuildSelections = deepClone(row.build_data);
+    localStorage.setItem(BUILD_STORAGE_KEY, JSON.stringify(itemBuildSelections));
+  }
+  setConnectionStatus("실시간 연결", "online");
+  renderBoard();
+}
+
+function subscribeToRealtime() {
+  if (!supabaseClient) return;
+  if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+  realtimeChannel = supabaseClient
+    .channel("aram-tier-state-live")
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: STATE_TABLE,
+        filter: `id=eq.${STATE_ROW_ID}`
+      },
+      (payload) => applyRealtimeState(payload.new)
+    )
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") setConnectionStatus("실시간 연결", "online");
+      if (status === "CHANNEL_ERROR") setConnectionStatus("실시간 연결 오류", "error");
+    });
+}
+
+async function updateSession(session) {
+  currentSession = session;
+  isAdmin = session?.user?.email?.toLocaleLowerCase() === ADMIN_EMAIL.toLocaleLowerCase();
+  updateAdminUi();
+  if (isAdmin && !serverStateLoaded) await loadServerState();
 }
 
 function allChampionLocations() {
@@ -395,6 +540,7 @@ function renderBoard() {
   });
 
   updateHistoryButtons();
+  updateAdminUi();
   if (activeSearchName) applySearchDimming([activeSearchName]);
 }
 
@@ -407,6 +553,8 @@ function createChampionCard(name) {
   card.dataset.name = name;
   card.querySelector(".champion-name").textContent = name;
   card.setAttribute("aria-label", `${name} 챔피언 카드`);
+  card.draggable = isAdmin;
+  card.classList.toggle("read-only", !isAdmin);
   image.alt = `${name} 공식 챔피언 이미지`;
 
   if (imageUrl) {
@@ -422,6 +570,10 @@ function createChampionCard(name) {
   });
 
   card.addEventListener("dragstart", (event) => {
+    if (!isAdmin) {
+      event.preventDefault();
+      return;
+    }
     draggedCard = card;
     dragStartState = stateString();
     card.classList.add("dragging");
@@ -450,6 +602,7 @@ function createChampionCard(name) {
 
 function registerDropZone(list) {
   list.addEventListener("dragover", (event) => {
+    if (!isAdmin) return;
     event.preventDefault();
     if (!draggedCard) return;
     list.classList.add("drag-over");
@@ -534,6 +687,8 @@ function showItemBuild(name, role) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "build-option";
+    button.disabled = !isAdmin;
+    button.title = isAdmin ? "눌러서 선택 또는 해제" : "관리자만 변경할 수 있습니다.";
     button.dataset.build = option.name;
     button.setAttribute("aria-pressed", String(selected.has(option.name)));
     button.classList.toggle("selected", selected.has(option.name));
@@ -550,6 +705,7 @@ function showItemBuild(name, role) {
 }
 
 function toggleBuildOption(button) {
+  if (!isAdmin) return;
   const selected = new Set(itemBuildSelections[activeBuildChampion] || []);
   const buildName = button.dataset.build;
   if (selected.has(buildName)) selected.delete(buildName);
@@ -562,18 +718,21 @@ function toggleBuildOption(button) {
 }
 
 undoButton.addEventListener("click", () => {
+  if (!isAdmin) return;
   if (!undoStack.length) return;
   redoStack.push(deepClone(tiers));
   restoreState(undoStack.pop());
 });
 
 redoButton.addEventListener("click", () => {
+  if (!isAdmin) return;
   if (!redoStack.length) return;
   undoStack.push(deepClone(tiers));
   restoreState(redoStack.pop());
 });
 
 resetButton.addEventListener("click", () => {
+  if (!isAdmin) return;
   if (!window.confirm("모든 티어, 역할, 순서를 초기화하시겠습니까?")) return;
   undoStack.push(deepClone(tiers));
   redoStack = [];
@@ -610,10 +769,55 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".champion-search")) searchResults.hidden = true;
 });
 
+adminButton.addEventListener("click", async () => {
+  if (!supabaseClient) {
+    window.alert("Supabase 연결 모듈을 불러오지 못했습니다. 새로고침 후 다시 시도해 주십시오.");
+    return;
+  }
+  if (isAdmin) {
+    await supabaseClient.auth.signOut();
+    return;
+  }
+  adminEmailInput.value = ADMIN_EMAIL;
+  adminPasswordInput.value = "";
+  loginMessage.textContent = "";
+  loginDialog.showModal();
+  adminPasswordInput.focus();
+});
+
+closeLoginButton.addEventListener("click", () => loginDialog.close());
+
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  loginMessage.textContent = "로그인 확인 중";
+  const { error } = await supabaseClient.auth.signInWithPassword({
+    email: adminEmailInput.value.trim(),
+    password: adminPasswordInput.value
+  });
+
+  if (error) {
+    loginMessage.textContent = "이메일 또는 비밀번호를 확인해 주십시오.";
+    return;
+  }
+  adminPasswordInput.value = "";
+  loginDialog.close();
+});
+
 async function initialize() {
   await loadChampionMetadata();
   tiers = loadSavedState() || makeInitialState();
   renderBoard();
+  if (!supabaseClient) {
+    setConnectionStatus("연결 모듈 오류", "error");
+    return;
+  }
+  const { data } = await supabaseClient.auth.getSession();
+  await updateSession(data.session);
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    setTimeout(() => updateSession(session), 0);
+  });
+  if (!serverStateLoaded) await loadServerState();
+  subscribeToRealtime();
 }
 
 initialize();
